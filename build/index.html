@@ -1,0 +1,141 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><script src="http://code.jquery.com/jquery-1.9.1.min.js"></script><script src="http://momentjs.com/downloads/moment.js"></script><meta name="viewport" content="width=device-width,initial-scale=1,shrink-to-fit=no"/><meta name="theme-color" content="#000000"/><link rel="manifest" href="/manifest.json"/><title>Motoweather</title><script type="text/javascript">var map;
+      var directionsManager;
+      var stepDistance = 40; //The distance in KM along the route to retrieve locations.
+      function GetMap() {  
+          var startLocation = document.getElementById("startIn").value;
+          var endLocation = document.getElementById("endIn").value;
+          if (startLocation || endLocation != ""){ //escapes mapcall if any input data is empty
+          document.getElementById("controlls").style.display = "none";
+          document.getElementById("overlay").style.display = "none";
+          map = new Microsoft.Maps.Map('#myMap', {});
+          //Load the directions and spatial math modules.
+          Microsoft.Maps.loadModule(['Microsoft.Maps.Directions', 'Microsoft.Maps.SpatialMath'], function () {
+              //Create an instance of the directions manager.
+              directionsManager = new Microsoft.Maps.Directions.DirectionsManager(map);
+              //Create waypoints to route between.
+              var seattleWaypoint = new Microsoft.Maps.Directions.Waypoint({ address: startLocation });
+              directionsManager.addWaypoint(seattleWaypoint);
+              var workWaypoint = new Microsoft.Maps.Directions.Waypoint({ address: endLocation });
+              directionsManager.addWaypoint(workWaypoint);
+              //Add event handler to directions manager.
+              Microsoft.Maps.Events.addHandler(directionsManager, 'directionsUpdated', directionsUpdated);
+              //Calculate directions.
+              directionsManager.calculateDirections();
+          });
+      }
+    }
+      //function that finds the points where weather data will be gathered and uses the data to create display objects.
+
+      function directionsUpdated(e) {
+          
+          
+          //Remove any previously calculated locations from the map.
+          map.entities.clear();
+          //Get the current route index.
+          var route = directionsManager.getCurrentRoute();
+          if (route && route.routePath && route.routePath.length > 0) {
+              //Create an array to store the calculated locations, add the starting location.
+              var locationsAlongPath = [route.routePath[0]];
+              //Calculate the length of the route.id 
+              var routeLength = Microsoft.Maps.SpatialMath.getLengthOfPath(route.routePath, Microsoft.Maps.SpatialMath.DistanceUnits.Kilometers)
+              var numSteps = Math.floor(routeLength / stepDistance);
+              var loc;
+              //Builds location point objects along the map
+              for (var i = 1; i <= numSteps; i++) {
+                  loc = Microsoft.Maps.SpatialMath.getLocationAlongPath(route.routePath, stepDistance * i, Microsoft.Maps.SpatialMath.DistanceUnits.Kilometers);
+                  locationsAlongPath.push(loc);
+              }
+              //Add the last location on the route.
+              locationsAlongPath.push(route.routePath[route.routePath.length - 1]);
+            
+              
+              //Load weather radar tile layer
+              var weatherTileSource = new Microsoft.Maps.TileSource({
+              uriConstructor: 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{zoom}/{x}/{y}.png'
+              });
+              var weatherTileLayer = new Microsoft.Maps.TileLayer({
+                  mercator: weatherTileSource,
+              });
+              map.layers.insert(weatherTileLayer);
+
+              var locationdata = [];
+              var pushIndex = [];
+
+              //Iterates through each location along the path
+              locationsAlongPath.forEach(function(element){
+                
+                  // Variables that store the strings built from latitude and longitude data. 
+                  // api.weather.gov/points/lat+long finds the local weather data stations and provides links and other information pertaining to the location
+                  // The second link is an external link to to send a user to weather.gov if they wish to find more info for a given area.
+                  var weatherAPI = "https://api.weather.gov/points/" + element.latitude + "," + element.longitude;
+                  var externalLink = "https://forecast.weather.gov/MapClick.php?lat=" + element.latitude + "&lon=" + element.longitude;
+                  // Regular expression for finding inclimate weather conditions from the shortForecast string.
+                  var conditionsRegex = RegExp('rain|storm|haze|Dust|Storm|Thunderstorm|Snow|Fog|Mist|Hail|Rain|Haze|Showers|Windy|Drizzle|Ice');
+                  // Clears the inclimate weather div before new things are built in to it in order to avoid stacking data when a new route is traced.
+                  $( ".inclimate" ).remove();
+                  // Grabs the points data from weather.gov, returns json.
+                  fetch(weatherAPI)
+                    .then((pointresp) => pointresp.json())
+                    .then((out) => {
+                        // Fetches the hourly forcast json from the link found in the points location json
+                        fetch(out.properties.forecastHourly)
+                          .then((forecastresp) => forecastresp.json())
+                          .then((hourly) => {
+                            // Current weather
+                            // Bool so green pins dont get dropped where inclimate data is found
+                            var poorWeather = false;
+                            // String that is being used to store the div being built
+                            var inclimateDiv = "";
+                            // The start of the information that is being built into the div
+                            weatherDOM = "<p><span class='city'>"+ out.properties.relativeLocation.properties.city + ", " + out.properties.relativeLocation.properties.state + "</span></p>";
+                            
+                            // Conditional loop that iterates through first 3 hours of hourly data
+                            for (var x = 0; x < 3; x++){
+                              // Conditional variables from hourly
+                              var forecast = hourly.properties.periods[x].shortForecast;
+                              var temperature = hourly.properties.periods[x].temperature;
+                              var windSpeed = hourly.properties.periods[x].windSpeed;
+                              // Converts iso 8601 time returned by hourly to 12 hour format
+                              var date = moment(hourly.properties.periods[x].startTime);
+                              var timeComponent = date.format('h:mm a');
+                              // Splits winspeed for int test
+                              var wind = windSpeed.split(" ");
+                              // Logical tests to see if we have any inclimate data in our hourly fetch
+                              if (wind[0] > 20 || (temperature < 48 || conditionsRegex.test(forecast) == true)){
+                                  poorWeather = true;
+                                  map.entities.push(new Microsoft.Maps.Pushpin(element, { color: 'red' }));
+                                  console.log("windspeed: " + wind[0]);
+                                  console.log(temperature); 
+                                  console.log(forecast);
+                                  weatherDOM += ("<div class='inclimateHour'><p>" + timeComponent + "</p><p><span class='temp'>" + temperature + "°F</span></p><p><span class='forecast'>" + forecast + "</span></p><p><span class='wind'>Wind: " + windSpeed + "</span></p></div>");   
+                              } else { 
+                                // We must have had good weather here. Builds a good weather div.
+                                weatherDOM += ("<div class='goodHour'><p>" + timeComponent + "</p><p><span class='temp'>" + temperature + "°F</span></p><p><span class='forecast'>" + forecast + "</span></p><p><span class='wind'>Wind: " + windSpeed + "</span></p></div>");
+                                if (poorWeather == false){
+                                // Checking to see if we also had poor weather on another timestamp, if so we do not want a green pushpin.
+                                map.entities.push(new Microsoft.Maps.Pushpin(element, { color: 'green' }));
+                                }
+                              }
+                            
+
+                            }
+                            /*
+                            Uses jquery to append the div to the page
+                            Definitely not how you do this in react:D
+                            */
+                            $("root").append("<div class='inclimate'>" + weatherDOM + "</div>");
+                            // builts the infoboxes that will be pushed to the map for a given point
+                            var builtLink = "<div style='position: absolute; bottom: 10px; left: 10px; width: 180px;'><a href='" + externalLink + "' target='_blank'>more info</a></div>";
+                            var infoboxTemplate = '<div id="infoboxText" style="background-color:none; border-style:none; border-radius: 5px; border-width:medium; border-color:black; min-height:110px; width: 220px; text-shadow: 2px 2px 0 #FFFFFF, 2px -2px 0 #FFFFFF, -2px 2px 0 #FFFFFF, -2px -2px 0 #FFFFFF, 2px 0px 0 #FFFFFF, 0px 2px 0 #FFFFFF, -2px 0px 0 #FFFFFF, 0px -2px 0 #FFFFFF; font-size: 10pt; font-weight: bold; "><b id="infoboxTitle" style="position: absolute; top: 10px; left: 10px; width: 180px;">{title}</b><a id="infoboxDescription" style="position: absolute; top: 30px; left: 10px; width: 120px; ">{description}</a></div>';
+                            var infobox = new Microsoft.Maps.Infobox(element, {
+                                  htmlContent: infoboxTemplate.replace('{title}', out.properties.relativeLocation.properties.city + ", " + out.properties.relativeLocation.properties.state).replace('{description}', forecast + "<br/>" + temperature + "°F" + "<br/>"+ builtLink ),
+                                  visible: true,
+                              }
+                            );
+                            //pushes the infobox to the map
+                            infobox.setMap(map);                            
+                          })                        
+                        })                
+              });
+              }
+          }</script><script type="text/javascript" src="https://www.bing.com/api/maps/mapcontrol?callback=GetMap&key=Aj2KvUHorWikdA7OZ4h7l6st6IMF830jIeKQKM307Odp1IJQm4RP8jFLipVHRKjo" async defer="defer"></script><link href="/static/css/main.7d4d86ea.chunk.css" rel="stylesheet"></head><body><noscript>You need to enable JavaScript to run this app.</noscript><div class="div-controlo" id="controlls"><p></p>Enter in your location and destination to find out if there's any nasty weather along your route.<p></p><p><input class="text" id="startIn" placeholder="Starting Location" onclick='this.value=""'/></p><p><input class="text" id="endIn" onkeydown="13==event.keyCode&&GetMap()" placeholder="Ending location" onclick='this.value=""'/></p><p><button class="button" onclick="GetMap()">Go Ride!</button></p></div><div id="myMap" style="position:relative;width:100%;height:100%"></div><div class="div-mapover" id="overlay"><div class="motoLogo"><img src="motoweather.png"/></div></div><div class="infoWrap" id="modLoc"><div class="close"><button class="buttonClose" onclick='document.getElementById("modLoc").style.display="none"'>X</button></div><root></root></div><div id="root"></div><div class="topButtons"><div class="leftTop"><button class="buttonL" onclick='document.getElementById("modLoc").style.display="inline"'>Detailed Info</button></div><div class="rightTop"><button class="buttonR" onclick='document.getElementById("controlls").style.display="inline",document.getElementById("overlay").style.display="inline"'>New Route</button></div></div><div class="logoSmall"><img src="motoweather.png" width="100px" height="auto"/></div><script>!function(l){function e(e){for(var r,t,n=e[0],o=e[1],u=e[2],f=0,i=[];f<n.length;f++)t=n[f],p[t]&&i.push(p[t][0]),p[t]=0;for(r in o)Object.prototype.hasOwnProperty.call(o,r)&&(l[r]=o[r]);for(s&&s(e);i.length;)i.shift()();return c.push.apply(c,u||[]),a()}function a(){for(var e,r=0;r<c.length;r++){for(var t=c[r],n=!0,o=1;o<t.length;o++){var u=t[o];0!==p[u]&&(n=!1)}n&&(c.splice(r--,1),e=f(f.s=t[0]))}return e}var t={},p={1:0},c=[];function f(e){if(t[e])return t[e].exports;var r=t[e]={i:e,l:!1,exports:{}};return l[e].call(r.exports,r,r.exports,f),r.l=!0,r.exports}f.m=l,f.c=t,f.d=function(e,r,t){f.o(e,r)||Object.defineProperty(e,r,{enumerable:!0,get:t})},f.r=function(e){"undefined"!=typeof Symbol&&Symbol.toStringTag&&Object.defineProperty(e,Symbol.toStringTag,{value:"Module"}),Object.defineProperty(e,"__esModule",{value:!0})},f.t=function(r,e){if(1&e&&(r=f(r)),8&e)return r;if(4&e&&"object"==typeof r&&r&&r.__esModule)return r;var t=Object.create(null);if(f.r(t),Object.defineProperty(t,"default",{enumerable:!0,value:r}),2&e&&"string"!=typeof r)for(var n in r)f.d(t,n,function(e){return r[e]}.bind(null,n));return t},f.n=function(e){var r=e&&e.__esModule?function(){return e.default}:function(){return e};return f.d(r,"a",r),r},f.o=function(e,r){return Object.prototype.hasOwnProperty.call(e,r)},f.p="/";var r=window.webpackJsonp=window.webpackJsonp||[],n=r.push.bind(r);r.push=e,r=r.slice();for(var o=0;o<r.length;o++)e(r[o]);var s=n;a()}([])</script><script src="/static/js/2.063ce5bc.chunk.js"></script><script src="/static/js/main.45acb522.chunk.js"></script></body></html>
